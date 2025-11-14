@@ -16,6 +16,7 @@ class TestRequest(BaseModel):
     client_id: str
     client_secret: str
     query: str
+    
     max_results: int = 10
     days: int = 1
     include_full_text: bool = True
