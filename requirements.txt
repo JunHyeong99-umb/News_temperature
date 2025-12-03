@@ -15,4 +15,5 @@ requests==2.32.3
 sqlite-utils==3.37
 lxml==5.3.0
 lxml_html_clean
+openai>=1.0.0
 

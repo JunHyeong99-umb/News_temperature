@@ -21,6 +21,7 @@ class TestRequest(BaseModel):
     days: int = 1
     include_full_text: bool = True
     sort_by: str = 'date'  # 'date': 날짜순, 'view': 조회수순
+    openai_api_key: Optional[str] = None  # OpenAI API 키 (요약 기능 사용 시)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -247,6 +248,12 @@ async def home():
                     </div>
                 </div>
                 
+                <div class="form-group">
+                    <label for="openai_api_key">OpenAI API 키 (선택사항 - 요약 기능 사용 시)</label>
+                    <input type="text" id="openai_api_key" name="openai_api_key" 
+                           placeholder="sk-... (OpenAI API 키를 입력하면 AI 요약 기능이 활성화됩니다)">
+                </div>
+                
                 <button type="submit" id="submitBtn">🚀 테스트 시작</button>
             </form>
             
@@ -273,7 +280,8 @@ async def home():
                     max_results: parseInt(formData.get('max_results')),
                     days: parseInt(formData.get('days')),
                     include_full_text: formData.get('include_full_text') === 'on',
-                    sort_by: formData.get('sort_by') || 'date'
+                    sort_by: formData.get('sort_by') || 'date',
+                    openai_api_key: formData.get('openai_api_key') || null
                 };
                 
                 const loading = document.getElementById('loading');
@@ -311,7 +319,7 @@ async def home():
                                         <p><strong>날짜:</strong> ${item.pubDate || '알 수 없음'}</p>
                                         ${item.view_count !== undefined ? `<p><strong>조회수:</strong> ${item.view_count.toLocaleString()}회</p>` : ''}
                                         <p><strong>본문 길이:</strong> ${item.text ? item.text.length : 0}자</p>
-                                        ${item.text ? `<p><strong>본문 미리보기:</strong> ${item.text.substring(0, 200)}...</p>` : ''}
+                                        ${item.text ? `<p><strong>본문 요약:</strong> ${item.text}</p>` : ''}
                                         <p><strong>링크:</strong> <a href="${item.link}" target="_blank">${item.link}</a></p>
                                     </div>
                                 `;
@@ -348,7 +356,8 @@ async def test_api(request: TestRequest):
         crawler = NaverNewsAPICrawler(
             client_id=request.client_id,
             client_secret=request.client_secret,
-            delay=0.1
+            delay=0.1,
+            openai_api_key=request.openai_api_key
         )
         
         results = crawler.get_recent_news(
@@ -406,7 +415,7 @@ if __name__ == "__main__":
     print("\n⏹️  서버를 종료하려면 Ctrl+C를 누르세요.\n")
     
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, reload=True)
+        uvicorn.run(app, host="0.0.0.0", port=port, reload=True)
     except OSError as e:
         if "address already in use" in str(e).lower() or "포트" in str(e).lower():
             print(f"\n❌ 오류: 포트 {port}가 이미 사용 중입니다.")
@@ -414,5 +423,10 @@ if __name__ == "__main__":
             print(f"💡 또는 사용 중인 프로세스를 종료하세요.\n")
         else:
             print(f"\n❌ 오류 발생: {e}\n")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ 예상치 못한 오류 발생: {e}\n")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
