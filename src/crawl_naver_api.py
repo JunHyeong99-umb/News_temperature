@@ -8,18 +8,26 @@ import os
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import time
+import re
 from bs4 import BeautifulSoup
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 
 class NaverNewsAPICrawler:
     """네이버 검색 API를 사용한 뉴스 크롤링 클래스"""
     
-    def __init__(self, client_id: str, client_secret: str, delay: float = 0.1):
+    def __init__(self, client_id: str, client_secret: str, delay: float = 0.1, openai_api_key: Optional[str] = None):
         """
         Args:
             client_id: 네이버 개발자 센터에서 발급받은 Client ID
             client_secret: 네이버 개발자 센터에서 발급받은 Client Secret
             delay: API 요청 간 대기 시간(초). API 제한 방지용
+            openai_api_key: OpenAI API 키 (요약 기능 사용 시 필요)
         """
         self.client_id = client_id
         self.client_secret = client_secret
@@ -29,6 +37,10 @@ class NaverNewsAPICrawler:
             'X-Naver-Client-Id': client_id,
             'X-Naver-Client-Secret': client_secret
         }
+        self.openai_api_key = openai_api_key
+        self.openai_client = None
+        if openai_api_key and OPENAI_AVAILABLE:
+            self.openai_client = OpenAI(api_key=openai_api_key)
     
     def search_news(
         self,
@@ -206,6 +218,85 @@ class NaverNewsAPICrawler:
             print(f"조회수 추출 오류 ({link}): {e}")
             return None
     
+    def summarize_text(self, text: str, max_length: int = 50) -> str:
+        """
+        OpenAI API를 사용하여 본문 텍스트를 요약합니다.
+        
+        Args:
+            text: 원본 본문 텍스트
+            max_length: 요약 최대 길이 (OpenAI API 사용 시 무시됨, 3줄 요약)
+            
+        Returns:
+            요약된 텍스트 (3줄 정도)
+        """
+        if not text or len(text.strip()) == 0:
+            return text or ''
+        
+        # 공백 제거
+        text = text.strip()
+        
+        # OpenAI API를 사용할 수 있는 경우 - 3줄 요약
+        if self.openai_client:
+            try:
+                # 본문이 너무 길면 토큰 제한을 고려하여 앞부분만 사용 (약 4000자)
+                text_to_summarize = text[:4000] if len(text) > 4000 else text
+                
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",  # 비용 효율적인 모델 사용
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "당신은 뉴스 기사 요약 전문가입니다. 주어진 뉴스 기사 본문을 3줄 정도로 핵심 내용을 간결하게 요약해주세요. 요약은 기사의 주요 사실, 인물, 장소, 시간, 이유 등을 포함해야 합니다. 각 줄은 완전한 문장으로 작성해주세요."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"다음 뉴스 기사 본문을 3줄 정도로 요약해주세요:\n\n{text_to_summarize}"
+                        }
+                    ],
+                    max_tokens=300,  # 3줄 요약을 위해 토큰 수 증가
+                    temperature=0.3
+                )
+                
+                summary = response.choices[0].message.content.strip()
+                return summary
+                
+            except Exception as e:
+                print(f"OpenAI API 요약 오류: {e}")
+                # 오류 발생 시 기본 요약 방식으로 폴백
+                return self._fallback_summarize(text, max_length)
+        else:
+            # OpenAI API를 사용할 수 없는 경우 기본 요약 방식 사용
+            return self._fallback_summarize(text, max_length)
+    
+    def _fallback_summarize(self, text: str, max_length: int = 50) -> str:
+        """
+        OpenAI API를 사용할 수 없을 때 사용하는 기본 요약 방식
+        """
+        text = text.strip()
+        
+        if len(text) <= max_length:
+            return text
+        
+        # 50자로 자르기 (공백을 고려하여 단어 중간에서 자르지 않도록)
+        summary = text[:max_length]
+        
+        # 마지막 문자가 공백이 아니고, 원본 텍스트가 더 길면 "..." 추가
+        if len(text) > max_length:
+            # 공백이나 문장 부호 앞에서 자르기
+            last_space = summary.rfind(' ')
+            last_punct = max(summary.rfind('.'), summary.rfind('!'), summary.rfind('?'), 
+                           summary.rfind('。'), summary.rfind('！'), summary.rfind('？'))
+            
+            # 문장 부호가 있으면 그 앞에서 자르기
+            if last_punct > max_length * 0.7:  # 70% 이상 위치에 문장 부호가 있으면
+                summary = summary[:last_punct + 1]
+            elif last_space > max_length * 0.7:  # 공백이 있으면 그 앞에서 자르기
+                summary = summary[:last_space]
+            
+            summary += '...'
+        
+        return summary
+    
     def extract_full_text(self, link: str) -> Optional[str]:
         """
         API에서 받은 링크로 실제 기사 본문을 추출합니다.
@@ -217,37 +308,111 @@ class NaverNewsAPICrawler:
         Returns:
             기사 본문 텍스트 또는 None
         """
+        if not link:
+            return None
+        
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
             }
-            response = requests.get(link, headers=headers, timeout=10)
+            
+            response = requests.get(link, headers=headers, timeout=15, allow_redirects=True)
             response.raise_for_status()
-            response.encoding = 'utf-8'
+            
+            # 인코딩 자동 감지
+            if response.encoding is None or response.encoding == 'ISO-8859-1':
+                response.encoding = response.apparent_encoding or 'utf-8'
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 네이버 뉴스 본문 선택자
-            content_elem = soup.select_one('#newsct_article, .news_end_body_body, ._article_body_contents')
-            if not content_elem:
-                content_elem = soup.find('div', {'id': lambda x: x and 'article' in x.lower()})
+            # 여러 선택자 시도 (우선순위 순)
+            selectors = [
+                '#newsct_article',
+                '.news_end_body_body',
+                '._article_body_contents',
+                '#articleBodyContents',
+                '.article_body',
+                '[id*="article"]',
+                '[class*="article"]',
+                '[class*="body"]',
+                'article',
+                '.content'
+            ]
+            
+            content_elem = None
+            for selector in selectors:
+                try:
+                    if selector.startswith('['):
+                        # 속성 선택자
+                        if 'id*=' in selector:
+                            content_elem = soup.find('div', {'id': lambda x: x and 'article' in x.lower()})
+                        elif 'class*=' in selector:
+                            content_elem = soup.find('div', {'class': lambda x: x and ('article' in str(x).lower() or 'body' in str(x).lower())})
+                    else:
+                        content_elem = soup.select_one(selector)
+                    
+                    if content_elem and content_elem.get_text(strip=True):
+                        break
+                except:
+                    continue
             
             if content_elem:
                 # 불필요한 태그 제거
-                for tag in content_elem.find_all(['script', 'style', 'iframe', 'div']):
-                    if 'ad' in tag.get('class', []) or 'ad' in tag.get('id', ''):
+                for tag in content_elem.find_all(['script', 'style', 'iframe', 'noscript', 'svg']):
+                    try:
                         tag.decompose()
+                    except (AttributeError, TypeError):
+                        continue
+                
+                # 광고 관련 태그 제거
+                for tag in content_elem.find_all(['div', 'section', 'aside']):
+                    try:
+                        # Tag 객체의 속성 안전하게 가져오기
+                        classes = getattr(tag, 'get', lambda x, y: [])('class', [])
+                        tag_id = getattr(tag, 'get', lambda x, y: '')('id', '')
+                        
+                        # classes가 None이거나 리스트가 아닌 경우 처리
+                        if classes is None:
+                            classes = []
+                        elif not isinstance(classes, list):
+                            classes = [classes] if classes else []
+                        
+                        if tag_id is None:
+                            tag_id = ''
+                        
+                        # 광고 관련 키워드 확인
+                        classes_str = str(classes).lower()
+                        tag_id_str = str(tag_id).lower()
+                        
+                        if any(keyword in classes_str or keyword in tag_id_str 
+                               for keyword in ['ad', 'advertisement', 'sponsor', 'promo', 'banner']):
+                            tag.decompose()
+                    except (AttributeError, TypeError):
+                        # 태그가 예상과 다른 타입이면 건너뛰기
+                        continue
                 
                 text = content_elem.get_text(separator='\n', strip=True)
                 # 연속된 공백 정리
-                import re
-                text = re.sub(r'\n\s*\n', '\n\n', text)
-                return text.strip()
+                text = re.sub(r'\n\s*\n+', '\n\n', text)
+                text = re.sub(r' +', ' ', text)
+                text = text.strip()
+                
+                # 최소 길이 체크 (너무 짧으면 유효하지 않은 것으로 간주)
+                if len(text) < 50:
+                    return None
+                
+                return text
             
             return None
             
-        except Exception as e:
-            print(f"본문 추출 오류 ({link}): {e}")
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException):
+            return None
+        except Exception:
             return None
     
     def crawl_news_with_full_text(
@@ -281,9 +446,12 @@ class NaverNewsAPICrawler:
                 'text': str (본문, include_full_text=True일 때만)
             } 형태의 딕셔너리 리스트
         """
+        # 본문 추출 실패 시 대비하여 더 많은 기사를 수집 (최대 2배까지)
+        # 실패한 기사를 제외하고도 충분한 수를 확보하기 위함
+        items_to_fetch = max_results * 2 if include_full_text else max_results
         items = self.get_all_news(
             query=query,
-            max_results=max_results,
+            max_results=items_to_fetch,
             date_from=date_from,
             date_to=date_to
         )
@@ -310,12 +478,31 @@ class NaverNewsAPICrawler:
                 # 원본 링크가 있으면 원본 링크 사용, 없으면 네이버 링크 사용
                 link_to_use = result['originallink'] or result['link']
                 full_text = self.extract_full_text(link_to_use)
-                result['text'] = full_text or result['description']
+                
+                if full_text:
+                    # 본문을 요약하여 저장 (3줄 요약)
+                    result['text'] = self.summarize_text(full_text)
+                    # 성공한 기사만 결과에 추가
+                    results.append(result)
+                else:
+                    # 본문 추출 실패 시 해당 기사는 건너뛰고 다음 기사로
+                    # (이미 충분한 수를 확보했으면 중단)
+                    if len(results) >= max_results:
+                        break
+                    continue  # 실패한 기사는 결과에 포함하지 않음
                 time.sleep(self.delay)  # 본문 추출 시 추가 대기
             else:
-                result['text'] = result['description']
+                # 본문 추출을 하지 않아도 description을 요약
+                description = result.get('description', '')
+                if description:
+                    result['text'] = self.summarize_text(description)
+                else:
+                    result['text'] = ''
+                results.append(result)
             
-            results.append(result)
+            # 이미 충분한 수를 확보했으면 중단
+            if len(results) >= max_results:
+                break
         
         # 정렬 처리
         if sort_by == 'view':
@@ -431,7 +618,7 @@ if __name__ == '__main__':
         print(f"제목: {result['title']}")
         print(f"출처: {result['source']}")
         print(f"날짜: {result['pubDate']}")
-        print(f"본문 길이: {len(result.get('text', ''))}자")
+        #print(f"본문 길이: {len(result.get('text', ''))}자")
         if result.get('text'):
             print(f"본문 미리보기: {result['text'][:200]}...")
         print(f"링크: {result['link']}")
