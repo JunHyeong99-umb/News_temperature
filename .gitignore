@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# 모델 파일 (너무 큼)
+models/*/
+!models/.gitkeep
+
+# 데이터 파일
+data/processed/*.jsonl
+data/ai_hub_raw/**/*.zip
+
+# 체크포인트 및 학습 상태
+**/checkpoint-*/
+**/optimizer.pt
+**/rng_state.pth
+**/scheduler.pt
+**/trainer_state.json
+**/training_args.bin
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 로그
+*.log
+
+# 임시 파일
+*.tmp
+*.bak
+
