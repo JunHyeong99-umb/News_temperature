@@ -1,0 +1,18 @@
+# Render 배포 설정 파일
+# Render에서 자동으로 인식합니다
+
+services:
+  - type: web
+    name: news-thermometer
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: standard  # starter는 모델 크기 제한으로 부족할 수 있음
+    region: singapore  # 또는 seoul (가능한 경우)
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: PYTHONUNBUFFERED
+        value: 1
+    healthCheckPath: /api/health
+    autoDeploy: true

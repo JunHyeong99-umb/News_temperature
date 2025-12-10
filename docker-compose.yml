@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: news-thermometer
+    ports:
+      - "8000:8000"
+    volumes:
+      # 모델 파일은 볼륨으로 마운트하지 않음 (이미지에 포함)
+      # temp 폴더는 컨테이너 내부에서 생성됨
+      - ./temp:/app/temp
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+

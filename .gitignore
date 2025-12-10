@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (large files) - excluded from Git
+*.safetensors
+*.pt
+*.pth
+*.bin
+kosum-v1-tuned/model.safetensors
+sentiment_model/**/*.safetensors
+sentiment_model/**/*.pt
+sentiment_model/**/*.pth
+sentiment_model/**/*.bin
+
+# Temporary files
+temp/
+*.log
+
+# Data files
+*.zip
+
